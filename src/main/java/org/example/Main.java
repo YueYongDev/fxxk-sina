@@ -1,10 +1,12 @@
 package org.example;
 
-import cn.hutool.Hutool;
+import cn.hutool.core.date.DateUnit;
+import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.file.FileReader;
 import cn.hutool.core.io.file.FileWriter;
 import cn.hutool.core.thread.ThreadUtil;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.gson.Gson;
@@ -28,9 +30,11 @@ import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,20 +52,29 @@ public class Main {
      */
     private static ExecutorService executor = ThreadUtil.newExecutor(5);
 
-    private static final String VAULT_PATH = "/Users/liangyueyong/Downloads/YYLiang";
+    private static final String VAULT_PATH = "";
 
-    private static final String IMG_DOWNLOAD_PATH = "/Users/liangyueyong/Downloads/image";
+    private static final String IMG_DOWNLOAD_PATH = "";
 
     //...生成上传凭证，然后准备上传
-    private static final String AK = "your access key";
+    private static final String AK = "";
 
-    private static final String SK = "your secret key";
+    private static final String SK = "";
 
-    private static final String BUCKET = "your BUCKET name";
+    private static final String BUCKET = "ytools";
 
     private static final String BASE_DOMAIN = "";
 
+    private static final List<String> OLD_PREFIX = ImmutableList.of("ws1", "ws2", "ws3", "ws4");
+
+    private static final String NEW_PREFIX = "tva1";
+
+    private static final boolean IS_DEBUG = false;
+
+    private static final Integer DEBUG_FILE_SIZE = 20;
+
     private static final List<String> ERROR_URL = Lists.newArrayList();
+
     private static final Map<String, String> URL_MAP = Maps.newHashMap();
 
     public static void main(String[] args) {
@@ -79,8 +92,11 @@ public class Main {
         URL_MAP.forEach((originUrl, replaceUrl) -> {
             String path = IMG_DOWNLOAD_PATH + "/" + originUrl.substring(originUrl.lastIndexOf("/") + 1);
             try {
-                download(originUrl, path);
-                log.info("download success:{}", originUrl);
+                Date startDate = new Date();
+                log.info("download starting, url:{}", originUrl);
+                String downloadUrl = replaceAny(originUrl, OLD_PREFIX, NEW_PREFIX);
+                download(downloadUrl, path);
+                log.info("download success, time consume: {}ms", DateUtil.between(startDate, new Date(), DateUnit.MS));
                 String uploadUrl = upload(path);
                 if (StringUtils.isNotBlank(uploadUrl)) {
                     log.info("upload success, new url:{}", uploadUrl);
@@ -88,22 +104,31 @@ public class Main {
                 }
             } catch (Throwable e) {
                 ERROR_URL.add(originUrl);
-                log.error("handle error:{}, errMsg:{}", originUrl, e.getMessage());
+                log.error("handle error:{}, errMsg:{}", originUrl, e);
             }
         });
 
+        log.info("start replace");
         files.forEach(file -> {
             try {
+                Date startDate = new Date();
+                log.info("replace file, name:{}", file.getPath());
                 // 默认UTF-8 编码，可以在构造中传入第二个参数做为编码
                 FileReader fileReader = new FileReader(file.getPath());
                 String content = fileReader.readString();
                 String replaceContent = replaceUrl(content, URL_MAP);
                 FileWriter writer = new FileWriter(file.getPath());
                 writer.write(replaceContent);
+                log.info("replace success, time consume: {}ms", DateUtil.between(startDate, new Date(), DateUnit.MS));
             } catch (Throwable e) {
                 log.error("write file error, errorMsg:{}", e.getMessage());
             }
         });
+    }
+
+    private static String replaceAny(String str, List<String> regex, String replaceStr) {
+        Optional<String> first = regex.stream().filter(str::contains).findFirst();
+        return first.isPresent() ? RegExUtils.replaceAll(str, first.get(), replaceStr) : str;
     }
 
     /**
@@ -111,8 +136,15 @@ public class Main {
      */
     public static List<File> listAllMDFile() {
         List<File> files = FileUtil.loopFiles(VAULT_PATH);
-        return files.stream().filter(Objects::nonNull).filter(File::isFile)
-            .filter(file -> StringUtils.endsWith(file.getName(), ".md")).collect(Collectors.toList());
+        List<File> collect = files.stream()
+            .filter(Objects::nonNull)
+            .filter(File::isFile)
+            .filter(file -> StringUtils.endsWith(file.getName(), ".md"))
+            .collect(Collectors.toList());
+        if (IS_DEBUG) {
+            return collect.stream().limit(DEBUG_FILE_SIZE).collect(Collectors.toList());
+        }
+        return collect;
     }
 
     /**
@@ -124,11 +156,16 @@ public class Main {
     public static List<String> getAllUrlsFromContent(String content) {
         List<String> urls = new ArrayList<>();
         Pattern pattern = Pattern.compile(
-            "\\b(((ht|f)tp(s?)\\:\\/\\/|~\\/|\\/)|www.)" + "(\\w+:\\w+@)?(([-\\w]+\\.)+(com|org|net|gov"
-                + "|mil|biz|info|mobi|name|aero|jobs|museum" + "|travel|[a-z]{2}))(:[\\d]{1,5})?"
-                + "(((\\/([-\\w~!$+|.,=]|%[a-f\\d]{2})+)+|\\/)+|\\?|#)?" + "((\\?([-\\w~!$+|.,*:]|%[a-f\\d{2}])+=?"
-                + "([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)" + "(&(?:[-\\w~!$+|.,*:]|%[a-f\\d{2}])+=?"
-                + "([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)*)*" + "(#([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)?\\b");
+            "\\b(((ht|f)tp(s?)\\:\\/\\/|~\\/|\\/)|www.)"
+                + "(\\w+:\\w+@)?(([-\\w]+\\.)+(com|org|net|gov"
+                + "|mil|biz|info|mobi|name|aero|jobs|museum"
+                + "|travel|[a-z]{2}))(:[\\d]{1,5})?"
+                + "(((\\/([-\\w~!$+|.,=]|%[a-f\\d]{2})+)+|\\/)+|\\?|#)?"
+                + "((\\?([-\\w~!$+|.,*:]|%[a-f\\d{2}])+=?"
+                + "([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)"
+                + "(&(?:[-\\w~!$+|.,*:]|%[a-f\\d{2}])+=?"
+                + "([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)*)*"
+                + "(#([-\\w~!$+|.,*:=]|%[a-f\\d]{2})*)?\\b");
         Matcher matcher = pattern.matcher(content);
         while (matcher.find()) {
             urls.add(matcher.group());
@@ -182,8 +219,6 @@ public class Main {
         Response response = uploadManager.put(localFilePath, key, upToken);
         //解析上传成功的结果
         DefaultPutRet putRet = new Gson().fromJson(response.bodyString(), DefaultPutRet.class);
-        System.out.println(putRet.key);
-        System.out.println(putRet.hash);
         return BASE_DOMAIN + putRet.key;
     }
 
@@ -197,7 +232,10 @@ public class Main {
             if (StringUtils.isBlank(newUrl)) {
                 continue;
             }
-            return RegExUtils.replaceAll(content, oldUrl, newUrl);
+            if (StringUtils.contains(content, oldUrl)) {
+                log.info("replace url,old url:{}, new url:{}", oldUrl, newUrl);
+                content = RegExUtils.replaceAll(content, oldUrl, newUrl);
+            }
         }
         return content;
     }
